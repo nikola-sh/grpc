@@ -40,7 +40,7 @@ cc_binary(
     defines = ["BAZEL_BUILD"],
     deps = [
         "//:grpc++",
-        "//examples/protos:helloworld_cc_grpc",
+        "//examples/protos:hellostreamingworld",
     ],
 )
 
@@ -83,7 +83,7 @@ cc_binary(
     defines = ["BAZEL_BUILD"],
     deps = [
         "//:grpc++",
-        "//examples/protos:helloworld_cc_grpc",
+        "//examples/protos:hellostreamingworld",
     ],
 )
 

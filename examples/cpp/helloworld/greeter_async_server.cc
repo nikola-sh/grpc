@@ -25,9 +25,9 @@
 #include <grpcpp/grpcpp.h>
 
 #ifdef BAZEL_BUILD
-#include "examples/protos/helloworld.grpc.pb.h"
+#include "examples/protos/hellostreamingworld.grpc.pb.h"
 #else
-#include "helloworld.grpc.pb.h"
+#include "hellostreamingworld.grpc.pb.h"
 #endif
 
 using grpc::Server;
@@ -36,9 +36,9 @@ using grpc::ServerBuilder;
 using grpc::ServerCompletionQueue;
 using grpc::ServerContext;
 using grpc::Status;
-using helloworld::Greeter;
-using helloworld::HelloReply;
-using helloworld::HelloRequest;
+using hellostreamingworld::MultiGreeter;
+using hellostreamingworld::HelloReply;
+using hellostreamingworld::HelloRequest;
 
 class ServerImpl final {
  public:
@@ -49,10 +49,11 @@ class ServerImpl final {
   }
 
   // There is no shutdown handling in this code.
-  void Run() {
-    std::string server_address("0.0.0.0:50051");
+  void Run(const int message_count) {
+    std::string server_address("localhost:50051");
 
     ServerBuilder builder;
+    
     // Listen on the given address without any authentication mechanism.
     builder.AddListeningPort(server_address, grpc::InsecureServerCredentials());
     // Register "service_" as the instance through which we'll communicate with
@@ -66,7 +67,7 @@ class ServerImpl final {
     std::cout << "Server listening on " << server_address << std::endl;
 
     // Proceed to the server's main loop.
-    HandleRpcs();
+    HandleRpcs(message_count);
   }
 
  private:
@@ -76,8 +77,8 @@ class ServerImpl final {
     // Take in the "service" instance (in this case representing an asynchronous
     // server) and the completion queue "cq" used for asynchronous communication
     // with the gRPC runtime.
-    CallData(Greeter::AsyncService* service, ServerCompletionQueue* cq)
-        : service_(service), cq_(cq), responder_(&ctx_), status_(CREATE) {
+    CallData(MultiGreeter::AsyncService* service, ServerCompletionQueue* cq, const int message_count)
+        : service_(service), cq_(cq), responder_(&ctx_), status_(CREATE), message_count_(message_count) {
       // Invoke the serving logic right away.
       Proceed();
     }
@@ -92,26 +93,36 @@ class ServerImpl final {
         // the tag uniquely identifying the request (so that different CallData
         // instances can serve different requests concurrently), in this case
         // the memory address of this CallData instance.
-        service_->RequestSayHello(&ctx_, &request_, &responder_, cq_, cq_,
+        service_->RequestsayHello(&ctx_, &request_, &responder_, cq_, cq_,
                                   this);
       } else if (status_ == PROCESS) {
-        // Spawn a new CallData instance to serve new clients while we process
-        // the one for this CallData. The instance will deallocate itself as
-        // part of its FINISH state.
-        new CallData(service_, cq_);
-
-        // The actual processing.
-        std::string prefix("Hello ");
-        reply_.set_message(prefix + request_.name());
-
-        // And we are done! Let the gRPC runtime know we've finished, using the
-        // memory address of this instance as the uniquely identifying tag for
-        // the event.
-        status_ = FINISH;
-        responder_.Finish(reply_, Status::OK, this);
+        if (messages_sent_ == 0)
+        {
+          // Spawn a new CallData instance to serve new clients while we process
+          // the one for this CallData. The instance will deallocate itself as
+          // part of its FINISH state.
+          new CallData(service_, cq_, message_count_);
+        }
+        
+        if (messages_sent_ < message_count_)
+        {
+          // The actual processing.
+          std::string prefix("Hello ");
+          reply_.set_message(prefix + request_.name());
+          
+          std::cout << "responder_.Write" << std::endl;
+          responder_.Write(reply_, this);
+          
+          ++messages_sent_;
+        } else {
+          std::cout << "responder_.Finish" << std::endl;
+          status_ = FINISH;
+          responder_.Finish(Status::OK, this);
+        }
       } else {
         GPR_ASSERT(status_ == FINISH);
         // Once in the FINISH state, deallocate ourselves (CallData).
+        std::cout << "delete this" << std::endl;
         delete this;
       }
     }
@@ -119,7 +130,7 @@ class ServerImpl final {
    private:
     // The means of communication with the gRPC runtime for an asynchronous
     // server.
-    Greeter::AsyncService* service_;
+    MultiGreeter::AsyncService* service_;
     // The producer-consumer queue where for asynchronous server notifications.
     ServerCompletionQueue* cq_;
     // Context for the rpc, allowing to tweak aspects of it such as the use
@@ -133,17 +144,20 @@ class ServerImpl final {
     HelloReply reply_;
 
     // The means to get back to the client.
-    ServerAsyncResponseWriter<HelloReply> responder_;
+    grpc::ServerAsyncWriter<HelloReply> responder_;
 
     // Let's implement a tiny state machine with the following states.
     enum CallStatus { CREATE, PROCESS, FINISH };
     CallStatus status_;  // The current serving state.
+    
+    const int message_count_;
+    int messages_sent_ = 0;
   };
 
   // This can be run in multiple threads if needed.
-  void HandleRpcs() {
+  void HandleRpcs(const int message_count) {
     // Spawn a new CallData instance to serve new clients.
-    new CallData(&service_, cq_.get());
+    new CallData(&service_, cq_.get(), message_count);
     void* tag;  // uniquely identifies a request.
     bool ok;
     while (true) {
@@ -159,13 +173,16 @@ class ServerImpl final {
   }
 
   std::unique_ptr<ServerCompletionQueue> cq_;
-  Greeter::AsyncService service_;
+  MultiGreeter::AsyncService service_;
   std::unique_ptr<Server> server_;
 };
 
 int main(int argc, char** argv) {
   ServerImpl server;
-  server.Run();
+  if (argc > 1)
+    server.Run(atoi(argv[1]));
+  else
+    server.Run(1);
 
   return 0;
 }
